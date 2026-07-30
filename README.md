@@ -83,7 +83,10 @@ scp -o ProxyJump=… nca_scanner.dump myvps-tunnel:/tmp/
 cd ~/waze-nca-scanner/deploy && docker compose -f docker-compose.prod.yml --env-file .env.prod stop api
 docker cp /tmp/nca_scanner.dump main-postgres:/tmp/nca_scanner.dump
 docker exec -e PGPASSWORD=… main-postgres \
-  pg_restore -U nca_scanner -d nca_scanner --clean --if-exists --no-owner /tmp/nca_scanner.dump
+  pg_restore -U ster -d nca_scanner --clean --if-exists --no-owner --no-acl /tmp/nca_scanner.dump
+# Restore as superuser then re-own app tables (TypeORM migrations need this):
+docker exec -e PGPASSWORD=… main-postgres psql -U ster -d nca_scanner -c \
+  "ALTER TABLE address_points OWNER TO nca_scanner; ALTER TABLE land_parcels OWNER TO nca_scanner; ALTER TABLE scan_tiles OWNER TO nca_scanner; ALTER TABLE migrations OWNER TO nca_scanner; GRANT ALL ON SCHEMA public TO nca_scanner;"
 ./deploy.sh
 ```
 
