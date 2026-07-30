@@ -93,7 +93,9 @@ export class ScannerService
         this.config.get('scanUseWeeklySpreadInterval'),
       );
       if (useWeekly) {
-        const n = await this.scanTiles.count();
+        const n = await this.scanTiles.count({
+          where: { layerKind: 'addresses' },
+        });
         const perRun = Math.max(
           1,
           Number(this.config.get('scanTilesPerRun') ?? 1),
