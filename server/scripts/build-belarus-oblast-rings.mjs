@@ -1,0 +1,192 @@
+/**
+ * Regenerate `src/scanner/belarus-oblast-rings.generated.ts` from OSM admin polygons.
+ *
+ * Data: OpenStreetMap / Nominatim (ODbL) — attribute “© OpenStreetMap contributors”.
+ *
+ * 1) Create folder `nca-scanner/tmp-by-oblast/` and download (respect Nominatim usage policy):
+ *
+ *    IDS="59189:brest 59161:homiel 59275:hrodna 59162:mahiliou 59752:minsk_oblast 59506:vitebsk 59195:minsk_city"
+ *    for entry in $IDS; do id="${entry%%:*}"; name="${entry##*:}"; \
+ *      curl -fsSL -A "your-app/1 (contact)" \
+ *      "https://nominatim.openstreetmap.org/lookup?osm_ids=R${id}&polygon_geojson=1&format=json" \
+ *      -o "tmp-by-oblast/${name}.json"; sleep 1.2; done
+ *
+ * 2) Run from repo root:
+ *    node nca-scanner/scripts/build-belarus-oblast-rings.mjs nca-scanner/src/scanner/belarus-oblast-rings.generated.ts nca-scanner/tmp-by-oblast
+ *
+ * Args: [outTsPath] [inputDir]
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(__dirname, '..');
+const INPUT_DIR = process.argv[3]
+  ? path.resolve(process.argv[3])
+  : path.join(ROOT, 'tmp-by-oblast');
+
+if (!fs.existsSync(INPUT_DIR)) {
+  console.error('Missing input dir:', INPUT_DIR);
+  process.exit(1);
+}
+
+/** ~220 m at Belarus lat — keeps files small while preserving oblast shape. */
+const EPSILON_DEG = 0.0025;
+const MAX_OUTER_POINTS = 180;
+
+function distSq(ax, ay, bx, by) {
+  const dx = ax - bx;
+  const dy = ay - by;
+  return dx * dx + dy * dy;
+}
+
+function perpendicularDistanceSq(px, py, x1, y1, x2, y2) {
+  const lineLenSq = distSq(x1, y1, x2, y2);
+  if (lineLenSq === 0) return distSq(px, py, x1, y1);
+  let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / lineLenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * (x2 - x1);
+  const projY = y1 + t * (y2 - y1);
+  return distSq(px, py, projX, projY);
+}
+
+function simplifyRing(ring, epsilonDeg) {
+  if (ring.length < 4) return ring;
+  const eps2 = epsilonDeg * epsilonDeg;
+  function rdp(pts) {
+    if (pts.length <= 2) return pts;
+    let maxSq = 0;
+    let idx = 0;
+    const [fx, fy] = pts[0];
+    const [lx, ly] = pts[pts.length - 1];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const [px, py] = pts[i];
+      const d2 = perpendicularDistanceSq(px, py, fx, fy, lx, ly);
+      if (d2 > maxSq) {
+        maxSq = d2;
+        idx = i;
+      }
+    }
+    if (maxSq > eps2) {
+      const left = rdp(pts.slice(0, idx + 1));
+      const right = rdp(pts.slice(idx));
+      return left.slice(0, -1).concat(right);
+    }
+    return [pts[0], pts[pts.length - 1]];
+  }
+  const closed = ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];
+  const raw = closed ? ring.slice(0, -1) : ring.slice();
+  const simp = rdp(raw);
+  if (closed && simp.length > 0) {
+    const [a, b] = simp[0];
+    simp.push([a, b]);
+  }
+  return simp;
+}
+
+function decimateMax(ring, maxPts) {
+  if (ring.length <= maxPts) return ring;
+  const closed =
+    ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1];
+  const pts = closed ? ring.slice(0, -1) : ring.slice();
+  const step = Math.max(1, Math.ceil(pts.length / (maxPts - 1)));
+  const out = [];
+  for (let i = 0; i < pts.length; i += step) out.push(pts[i]);
+  if (closed && out.length > 0) out.push([...out[0]]);
+  return out;
+}
+
+function normalizeGeoJsonToPolygons(geojson) {
+  if (geojson.type === 'Polygon') {
+    const rings = geojson.coordinates.map((r) => r.map(([lon, lat]) => [lon, lat]));
+    return [{ outer: rings[0], holes: rings.slice(1) }];
+  }
+  if (geojson.type === 'MultiPolygon') {
+    return geojson.coordinates.map((polyRings) => ({
+      outer: polyRings[0].map(([lon, lat]) => [lon, lat]),
+      holes: polyRings.slice(1).map((h) => h.map(([lon, lat]) => [lon, lat])),
+    }));
+  }
+  throw new Error(`Unsupported type ${geojson.type}`);
+}
+
+const FILES = [
+  { file: 'brest.json', id: 'brest', nameEn: 'Brest Region' },
+  { file: 'homiel.json', id: 'homiel', nameEn: 'Homiel Region' },
+  { file: 'hrodna.json', id: 'hrodna', nameEn: 'Hrodna Region' },
+  { file: 'mahiliou.json', id: 'mahiliou', nameEn: 'Mahiliou Region' },
+  { file: 'minsk_oblast.json', id: 'minsk_oblast', nameEn: 'Minsk Region' },
+  { file: 'vitebsk.json', id: 'vitebsk', nameEn: 'Vitsebsk Region' },
+  { file: 'minsk_city.json', id: 'minsk_city', nameEn: 'City of Minsk' },
+];
+
+function loadGeojson(file) {
+  const p = path.join(INPUT_DIR, file);
+  const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+  return j[0].geojson;
+}
+
+function fmtRing(ring) {
+  const lines = ring.map(
+    ([lon, lat]) => `        [${lon.toFixed(5)}, ${lat.toFixed(5)}],`,
+  );
+  return lines.join('\n');
+}
+
+let out = `/**
+ * Simplified WGS84 polygons for Belarus voblasts + City of Minsk (admin boundaries).
+ * Generated by scripts/build-belarus-oblast-rings.mjs from OSM polygons (ODbL).
+ * Do not edit by hand unless refreshing from source.
+ */
+
+export type LonLat = readonly [number, number];
+
+export interface OblastPolygonPiece {
+  /** Outer ring, closed (first vertex repeats last). lon, lat */
+  readonly outer: readonly LonLat[];
+  /** Interior rings (holes), each closed */
+  readonly holes: readonly (readonly LonLat[])[];
+}
+
+export interface BelarusOblastDefinition {
+  readonly id: string;
+  readonly nameEn: string;
+  /** One entry per MultiPolygon part; Polygon is a single piece */
+  readonly pieces: readonly OblastPolygonPiece[];
+}
+
+export const BELARUS_OBLASTS: readonly BelarusOblastDefinition[] = [
+`;
+
+for (const def of FILES) {
+  const gj = loadGeojson(def.file);
+  const polys = normalizeGeoJsonToPolygons(gj);
+  out += `  {\n    id: '${def.id}',\n    nameEn: '${def.nameEn}',\n    pieces: [\n`;
+  for (const { outer, holes } of polys) {
+    let o = simplifyRing(outer, EPSILON_DEG);
+    o = decimateMax(o, MAX_OUTER_POINTS);
+    const hs = holes.map((h) => {
+      let hh = simplifyRing(h, EPSILON_DEG * 0.85);
+      hh = decimateMax(hh, 80);
+      return hh;
+    });
+    out += `      {\n        outer: [\n${fmtRing(o)}\n        ],\n        holes: [\n`;
+    for (const h of hs) {
+      out += `          [\n${fmtRing(h)}\n          ],\n`;
+    }
+    out += `        ],\n      },\n`;
+  }
+  out += `    ],\n  },\n`;
+}
+
+out += `] as const satisfies readonly BelarusOblastDefinition[];\n`;
+
+const dest = process.argv[2] ? path.resolve(process.argv[2]) : null;
+if (dest) {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, out, 'utf8');
+  console.error('Wrote', dest);
+} else {
+  process.stdout.write(out);
+}

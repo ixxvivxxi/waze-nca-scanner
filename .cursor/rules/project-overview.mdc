@@ -1,0 +1,22 @@
+---
+description: Project overview — architecture, URLs, related repos
+alwaysApply: true
+---
+
+# Waze NCA Scanner — project overview
+
+Scans NCA cadastral map (map.nca.by WFS), stores addresses/parcels in PostGIS, serves WME userscript.
+
+| Piece | Path | Notes |
+|-------|------|-------|
+| API | `server/` | NestJS + TypeORM + `@nestjs/schedule` |
+| Deploy | `deploy/` | Compose on VPS; nginx TLS |
+| Userscript | `wme-nca-addresses-nearby.user.js` | Also mirrored in `wme-scripts` |
+
+**Production:** `https://waze-nca-scanner.ster.by`  
+**Repo:** `/home/anton/projects/waze-nca-scanner` → `github.com/ixxvivxxi/waze-nca-scanner`  
+**Related:** `/home/anton/projects/wme-scripts` (Tampermonkey scripts)
+
+Prod DB is **shared `main-postgres`** with PostGIS (`postgis/postgis:16-3.4`). Local dev uses `server/docker-compose.yml` PostGIS on port 5433.
+
+Do **not** commit secrets (`deploy/.env.prod`, `server/.env`). Never invent deploy passwords.

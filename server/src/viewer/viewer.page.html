@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NCA Scanner — карта данных</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+    #map { height: 100%; width: 100%; }
+    .panel {
+      position: absolute; z-index: 1000; top: 10px; left: 10px;
+      background: rgba(255,255,255,0.94); padding: 12px 14px; border-radius: 8px;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.2); max-width: min(360px, 92vw);
+      font-size: 13px; line-height: 1.45;
+    }
+    .panel h1 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+    .stats { margin: 0 0 10px; color: #333; }
+    .stats dt { font-weight: 600; margin-top: 6px; }
+    .stats dd { margin: 0 0 0 8px; color: #444; }
+    .layers { margin-top: 8px; border-top: 1px solid #ddd; padding-top: 8px; }
+    .layers label { display: flex; align-items: center; gap: 6px; margin: 4px 0; cursor: pointer; }
+    .legend { margin-top: 8px; font-size: 11px; color: #444; line-height: 1.55; }
+    .legend .legend-sub { display: block; margin: 4px 0 6px; color: #555; font-size: 10.5px; line-height: 1.45; }
+    .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 2px; vertical-align: middle; }
+    .hint { margin-top: 8px; font-size: 11px; color: #666; }
+    .err { color: #b00020; font-size: 12px; margin-top: 6px; }
+    .leaflet-control-attribution { font-size: 10px; }
+    .nca-panel {
+      position: absolute; z-index: 1001; bottom: 12px; right: 12px; left: auto;
+      width: min(440px, 94vw); max-height: min(42vh, 360px);
+      background: rgba(255,255,255,0.97); border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2); font-size: 12px; line-height: 1.4;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .nca-panel header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 10px; border-bottom: 1px solid #ddd; font-weight: 600;
+    }
+    .nca-panel header button {
+      border: none; background: #eee; border-radius: 4px; padding: 4px 10px; cursor: pointer;
+    }
+    .nca-panel .body { padding: 8px 10px; overflow: auto; flex: 1; }
+    .nca-panel pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 11px; }
+    .nca-panel .meta { color: #555; margin-bottom: 6px; }
+    .nca-panel .loading { color: #666; }
+  </style>
+</head>
+<body>
+  <div class="panel" lang="ru">
+    <h1>NCA Scanner — данные из БД</h1>
+    <dl class="stats" id="stats">Загрузка статистики…</dl>
+    <div class="layers">
+      <strong>Слои</strong>
+      <label><input type="checkbox" id="ly-tiles" checked /> Скан-тайлы (по статусу)</label>
+      <label><input type="checkbox" id="ly-parcels" /> Земельные участки (с масштаба 7)</label>
+      <label><input type="checkbox" id="ly-addresses" /> Адресные точки (с масштаба 9)</label>
+    </div>
+    <div class="legend" id="tile-legend">
+      <strong>Легенда скан-тайлов</strong><br/>
+      <span class="legend-sub">Заливка — давность данных в bbox (по последнему <code>fetched_at</code> в БД). Сканер обходит очередь примерно <strong>раз в неделю</strong> — пороги ниже с запасом на разброс по тайлам. Контур — тот же оттенок; если тайл ещё <strong>в очереди</strong>, а данные уже есть — контур <strong>пунктирный</strong>. Две строки очереди (адреса и участки) с одним bbox на карте <strong>сливаются в один полигон</strong> (цвет по более свежей дате).</span><br/>
+      <span class="sw" style="background:#388e3c;border:2px solid #1b5e20"></span> до ~10 суток (есть свежие <strong>адреса</strong> в БД по ячейке; при двух слоях — по более старой из двух дат)
+      <span class="sw" style="background:#fffde7;border:2px solid #f9a825"></span> в БД есть только участки, <strong>адресов по ячейке нет</strong>
+      <span class="sw" style="background:#fb8c00;border:2px solid #e65100"></span> ~10–21 суток (устаревают)
+      <span class="sw" style="background:#c62828;border:2px solid #6d0000"></span> старше ~21 суток (вероятна проблема)
+      <span class="sw" style="background:#bdbdbd;border:2px solid #424242"></span> нет строк в БД по bbox<br/>
+      <span class="sw" style="background:#fff59d;border:2px dashed #f57f17"></span> в очереди, данных в БД по bbox ещё нет
+      <span class="sw" style="background:#ffcdd2;border:2px solid #b71c1c"></span> ошибка сканирования<br/>
+      <span class="sw" style="background:#4fc3f7;border:2px solid #01579b"></span> bbox запроса «живого» NCA (пока открыта панель)<br/>
+      <span class="sw" style="background:#f8bbd0;border:3px solid #ad1457"></span> тайл, который сейчас обрабатывает <strong>фоновый сканер</strong>
+    </div>
+    <p class="hint">Сдвиньте карту или измените масштаб — объекты подгружаются для видимой области. Слишком широкий вид (&gt; ~15° по стороне) не запрашивается.</p>
+    <p class="hint"><strong>Живой NCA:</strong> клик по любому скан-тайлу — сначала запрашиваются <strong>адресные точки</strong> для этого bbox; <strong>участки</strong> — только если NCA не вернул ни одной адресной точки. На сервере: WFS GetFeature по под-ячейкам. Параметры: <code>VIEWER_NCA_SUBDIVIDE</code>, <code>VIEWER_NCA_REQUEST_DELAY_MS</code> в <code>.env</code>.</p>
+    <div class="err" id="err" hidden></div>
+  </div>
+  <div id="nca-panel" class="nca-panel" hidden></div>
+  <div id="map"></div>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script>
+(function () {
+  const errEl = document.getElementById('err');
+  function showErr(msg) {
+    errEl.textContent = msg;
+    errEl.hidden = !msg;
+  }
+
+  /** WGS84 [[south, west], [north, east]] — Belarus envelope for initial map frame. */
+  const BELARUS_BOUNDS = [
+    [51.22, 23.12],
+    [56.18, 32.75],
+  ];
+  /** One zoom level lower than before: load parcels / addresses when map is more zoomed out. */
+  const ZOOM_PARCELS_MIN = 7;
+  const ZOOM_ADDRESSES_MIN = 9;
+
+  const map = L.map('map').setView([53.55, 27.55], 6);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap',
+  }).addTo(map);
+  /** Above GeoJSON scan tiles (overlayPane ~400); does not steal clicks from tiles. */
+  map.createPane('ncaScannerActive');
+  map.getPane('ncaScannerActive').style.zIndex = '660';
+  map.getPane('ncaScannerActive').style.pointerEvents = 'none';
+
+  /** ~1.4 weeks: one weekly queue sweep + slack so tiles are not orange right before their turn. */
+  const MS_DATA_FRESH = 10 * 24 * 60 * 60 * 1000;
+  /** ~3 weeks without refresh — likely missed cycles or stalled scanner. */
+  const MS_DATA_STALE = 21 * 24 * 60 * 60 * 1000;
+
+  function lastDataFetchedMs(p) {
+    if (!p || p.lastDataFetchedAt == null) return null;
+    var v = p.lastDataFetchedAt;
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      if (v < 1e12) return v * 1000;
+      return v;
+    }
+    var d = new Date(v);
+    var t = d.getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+
+  /** Exact WGS84 bbox from API (preferred over ring bounds — one value for addresses + parcels rows). */
+  function bboxFromScanFeatureProps(p) {
+    if (!p) return null;
+    var a = Number(p.minLon);
+    var b = Number(p.minLat);
+    var c = Number(p.maxLon);
+    var d = Number(p.maxLat);
+    if (![a, b, c, d].every(function (x) { return Number.isFinite(x); })) return null;
+    return {
+      minLon: Math.min(a, c),
+      maxLon: Math.max(a, c),
+      minLat: Math.min(b, d),
+      maxLat: Math.max(b, d),
+    };
+  }
+
+  /**
+   * One polygon per geographic cell. Keep separate lastAddrFetchedAt / lastParcFetchedAt so the map
+   * does not look "fresh green" from parcels while address_points for the cell are still empty.
+   */
+  function mergeScanTileFeaturesByBbox(features) {
+    var groups = new Map();
+    for (var i = 0; i < features.length; i++) {
+      var f = features[i];
+      var p = f.properties || {};
+      var bb = bboxFromScanFeatureProps(p);
+      if (!bb && f.geometry && f.geometry.type === 'Polygon' && f.geometry.coordinates && f.geometry.coordinates[0]) {
+        bb = ringToBbox(f.geometry.coordinates[0]);
+      }
+      if (!bb) continue;
+      var key = [bb.minLon, bb.minLat, bb.maxLon, bb.maxLat].map(function (x) { return x.toFixed(6); }).join(',');
+      var cur = groups.get(key);
+      if (!cur) {
+        var init = Object.assign({}, p, bb, {
+          lastAddrFetchedAt: p.layerKind === 'addresses' ? p.lastDataFetchedAt : null,
+          lastParcFetchedAt: p.layerKind === 'parcels' ? p.lastDataFetchedAt : null,
+        });
+        delete init.lastDataFetchedAt;
+        groups.set(key, { geom: f.geometry, props: init });
+        continue;
+      }
+      var q = cur.props;
+      if (p.layerKind === 'addresses') {
+        q.lastAddrFetchedAt = p.lastDataFetchedAt != null ? p.lastDataFetchedAt : q.lastAddrFetchedAt;
+      } else {
+        q.lastParcFetchedAt = p.lastDataFetchedAt != null ? p.lastDataFetchedAt : q.lastParcFetchedAt;
+      }
+      if (p.status === 'pending' || q.status === 'pending') q.status = 'pending';
+      else if (p.status === 'failed' || q.status === 'failed') q.status = 'failed';
+      else q.status = 'done';
+      if (p.layerKind !== q.layerKind) q.layerKind = 'addresses';
+      q.tileKey = (q.tileKey || '') + '+' + (p.tileKey || '');
+      delete q.lastDataFetchedAt;
+      cur.props = q;
+    }
+    var out = [];
+    groups.forEach(function (v) {
+      out.push({
+        type: 'Feature',
+        geometry: v.geom,
+        properties: v.props,
+      });
+    });
+    return out;
+  }
+
+  /**
+   * Fill = freshness of ingested data; stroke = scan queue (pending/failed) or same family as fill when done.
+   * Strong contrast so borders are not all one hue.
+   */
+  function tileStyle(f) {
+    const p = f.properties || {};
+    const status = p.status;
+    const base = { weight: 2, fillOpacity: 0.14, opacity: 1 };
+    if (status === 'failed') {
+      return Object.assign({}, base, {
+        color: '#7f0000',
+        fillColor: '#ffcdd2',
+        weight: 3,
+        fillOpacity: 0.22,
+      });
+    }
+    var tAddr = p.lastAddrFetchedAt != null ? lastDataFetchedMs({ lastDataFetchedAt: p.lastAddrFetchedAt }) : null;
+    var tParc = p.lastParcFetchedAt != null ? lastDataFetchedMs({ lastDataFetchedAt: p.lastParcFetchedAt }) : null;
+    var tLegacy = lastDataFetchedMs(p);
+
+    function styleFreshness(ageMs, pending) {
+      var fill = '#c62828';
+      var stroke = '#6d0000';
+      if (ageMs < MS_DATA_FRESH) {
+        fill = '#388e3c';
+        stroke = '#1b5e20';
+      } else if (ageMs < MS_DATA_STALE) {
+        fill = '#fb8c00';
+        stroke = '#e65100';
+      }
+      if (pending) {
+        return Object.assign({}, base, {
+          color: stroke,
+          fillColor: fill,
+          weight: 3,
+          dashArray: '7 5',
+          fillOpacity: 0.2,
+        });
+      }
+      return Object.assign({}, base, {
+        color: stroke,
+        fillColor: fill,
+        weight: 2,
+        fillOpacity: 0.16,
+      });
+    }
+
+    if (tAddr != null && tParc != null) {
+      return styleFreshness(Date.now() - Math.min(tAddr, tParc), status === 'pending');
+    }
+    if (tAddr != null && tParc == null) {
+      return styleFreshness(Date.now() - tAddr, status === 'pending');
+    }
+    if (tAddr == null && tParc != null) {
+      if (status === 'pending') {
+        return Object.assign({}, base, {
+          color: '#f57f17',
+          fillColor: '#fff8e1',
+          weight: 3,
+          dashArray: '6 4',
+          fillOpacity: 0.24,
+        });
+      }
+      return Object.assign({}, base, {
+        color: '#f9a825',
+        fillColor: '#fffde7',
+        weight: 2,
+        fillOpacity: 0.2,
+      });
+    }
+    const t = tLegacy;
+    if (t != null) {
+      return styleFreshness(Date.now() - t, status === 'pending');
+    }
+    if (status === 'pending') {
+      return Object.assign({}, base, {
+        color: '#f57f17',
+        fillColor: '#fff9c4',
+        weight: 3,
+        dashArray: '6 4',
+        fillOpacity: 0.26,
+      });
+    }
+    return Object.assign({}, base, {
+      color: '#424242',
+      fillColor: '#e0e0e0',
+      weight: 2,
+      fillOpacity: 0.16,
+    });
+  }
+
+  function ringToBbox(ring) {
+    var minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+    for (var k = 0; k < ring.length; k++) {
+      var lon = ring[k][0], lat = ring[k][1];
+      minLon = Math.min(minLon, lon);
+      maxLon = Math.max(maxLon, lon);
+      minLat = Math.min(minLat, lat);
+      maxLat = Math.max(maxLat, lat);
+    }
+    return { minLon: minLon, minLat: minLat, maxLon: maxLon, maxLat: maxLat };
+  }
+
+  var ncaPanel = document.getElementById('nca-panel');
+  /** Rectangle for the WGS84 bbox passed to Live NCA (removed when panel closes). */
+  var liveNcaBboxRect = null;
+
+  function clearLiveNcaBbox() {
+    if (liveNcaBboxRect) {
+      map.removeLayer(liveNcaBboxRect);
+      liveNcaBboxRect = null;
+    }
+  }
+
+  /** Highlight minLon/minLat/maxLon/maxLat from query strings (same bbox as nca-live). */
+  function showLiveNcaBboxFromBaseQ(baseQ) {
+    clearLiveNcaBbox();
+    var minLon = parseFloat(baseQ.minLon);
+    var minLat = parseFloat(baseQ.minLat);
+    var maxLon = parseFloat(baseQ.maxLon);
+    var maxLat = parseFloat(baseQ.maxLat);
+    if (![minLon, minLat, maxLon, maxLat].every(function (x) { return Number.isFinite(x); })) return;
+    liveNcaBboxRect = L.rectangle(
+      [
+        [minLat, minLon],
+        [maxLat, maxLon],
+      ],
+      {
+        color: '#0277bd',
+        weight: 2,
+        fillColor: '#0288d1',
+        fillOpacity: 0.07,
+        dashArray: '8 6',
+      },
+    ).addTo(map);
+  }
+
+  function hideNcaPanel() {
+    clearLiveNcaBbox();
+    ncaPanel.hidden = true;
+    ncaPanel.innerHTML = '';
+  }
+
+  function showNcaPanel(title, html) {
+    ncaPanel.hidden = false;
+    ncaPanel.innerHTML =
+      '<header><span>' + title + '</span><button type="button" id="nca-close">Закрыть</button></header>' +
+      '<div class="body">' + html + '</div>';
+    document.getElementById('nca-close').addEventListener('click', hideNcaPanel);
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  async function openNcaLivePanel(feature) {
+    var props = feature.properties || {};
+    var g = feature.geometry;
+    var bbox = bboxFromScanFeatureProps(props);
+    if (!bbox && g && g.type === 'Polygon' && g.coordinates && g.coordinates[0]) {
+      bbox = ringToBbox(g.coordinates[0]);
+    }
+    if (!bbox) {
+      showNcaPanel('Живой NCA', '<p class="err">Нужен полигон тайла или bbox в свойствах.</p>');
+      return;
+    }
+    var queueLayer = props.layerKind === 'parcels' ? 'parcels' : 'addresses';
+    var baseQ = {
+      minLon: String(bbox.minLon),
+      minLat: String(bbox.minLat),
+      maxLon: String(bbox.maxLon),
+      maxLat: String(bbox.maxLat),
+    };
+    showNcaLivePanelWithFetch(baseQ, queueLayer, props.tileKey || '—');
+  }
+
+  /**
+   * Always load address points first; land parcels only if NCA returns no address features in bbox.
+   */
+  async function showNcaLivePanelWithFetch(baseQ, queueLayer, tileKey) {
+    showLiveNcaBboxFromBaseQ(baseQ);
+    var title = 'Живой NCA — сначала адреса';
+    showNcaPanel(title, '<p class="loading">Загрузка адресов с map.nca.by…</p><p class="meta">тип тайла в очереди: ' +
+      escapeHtml(queueLayer === 'parcels' ? 'участки' : 'адреса') + ', ключ: ' + escapeHtml(tileKey) + '</p>');
+    try {
+      var qAddr = new URLSearchParams(Object.assign({}, baseQ, { layerKind: 'addresses' }));
+      var r1 = await fetch('/api/viewer/nca-live.geojson?' + qAddr.toString());
+      var t1 = await r1.text();
+      if (!r1.ok) {
+        showNcaPanel(title, '<p class="err">' + escapeHtml(t1.slice(0, 500)) + '</p>');
+        return;
+      }
+      var fcAddr = JSON.parse(t1);
+      var featsAddr = fcAddr.features || [];
+      var fc = fcAddr;
+      var layerKind = 'addresses';
+      var note = '';
+      if (featsAddr.length === 0) {
+        showNcaPanel(title, '<p class="loading">Адресов нет — загрузка участков…</p><p class="meta">ключ: ' +
+          escapeHtml(tileKey) + '</p>');
+        var qPar = new URLSearchParams(Object.assign({}, baseQ, { layerKind: 'parcels' }));
+        var r2 = await fetch('/api/viewer/nca-live.geojson?' + qPar.toString());
+        var t2 = await r2.text();
+        if (!r2.ok) {
+          showNcaPanel(title, '<p class="err">Адресов нет; запрос участков не удался: ' + escapeHtml(t2.slice(0, 500)) + '</p>');
+          return;
+        }
+        fc = JSON.parse(t2);
+        layerKind = 'parcels';
+        note = '<p class="meta">В этом bbox NCA не вернул адресов — показаны <strong>участки</strong>.</p>';
+      }
+      var feats = fc.features || [];
+      var ingestAddr = fcAddr.ingestedCount;
+      var ingestParc = layerKind === 'parcels' && fc.ingestedCount != null ? fc.ingestedCount : null;
+      var ingestLine = '';
+      if (ingestAddr != null || ingestParc != null) {
+        ingestLine = 'записей в БД: адреса <strong>' + (ingestAddr != null ? ingestAddr : '—') + '</strong>';
+        if (ingestParc != null) ingestLine += ', участки <strong>' + ingestParc + '</strong>';
+      }
+      var finalTitle = layerKind === 'addresses' ? 'Живой NCA — адреса' : 'Живой NCA — участки (запасной вариант)';
+      var lines = [note, '<p class="meta">Объектов из NCA: <strong>' + feats.length + '</strong>' +
+        (ingestLine ? ' — ' + ingestLine : '') + '</p>'].filter(Boolean);
+      var maxShow = 12;
+      for (var i = 0; i < Math.min(maxShow, feats.length); i++) {
+        var p = feats[i].properties || {};
+        var one = layerKind === 'addresses'
+          ? ('id_adr=' + (p.id_adr != null ? p.id_adr : '—'))
+          : ('cad_num=' + (p.cad_num != null ? p.cad_num : '—') + ', id=' + String(feats[i].id != null ? feats[i].id : '—'));
+        lines.push('<p class="meta">' + (i + 1) + '. ' + escapeHtml(one) + '</p>');
+      }
+      if (feats.length > maxShow) {
+        lines.push('<p class="meta">… ещё ' + (feats.length - maxShow) + '</p>');
+      }
+      var jsonSample = JSON.stringify(fc, null, 2);
+      if (jsonSample.length > 12000) jsonSample = jsonSample.slice(0, 12000) + '\n… (обрезано)';
+      lines.push('<pre>' + escapeHtml(jsonSample) + '</pre>');
+      showNcaPanel(finalTitle, lines.join(''));
+      void loadVisible();
+      void loadStats();
+    } catch (e) {
+      showNcaPanel(title, '<p class="err">' + escapeHtml(e.message || String(e)) + '</p>');
+    }
+  }
+
+  function onEachScanTile(feature, layer) {
+    layer.on('click', function (ev) {
+      if (ev && ev.originalEvent) L.DomEvent.stopPropagation(ev.originalEvent);
+      void openNcaLivePanel(feature);
+    });
+    layer.on('mouseover', function () {
+      var s = tileStyle(feature);
+      layer.setStyle(
+        Object.assign({}, s, {
+          weight: (s.weight || 2) + 1,
+          fillOpacity: Math.min(0.42, (s.fillOpacity || 0.14) + 0.1),
+        }),
+      );
+    });
+    layer.on('mouseout', function () {
+      tilesLayer.resetStyle(layer);
+    });
+  }
+
+  const tilesLayer = L.geoJSON(null, { style: tileStyle, onEachFeature: onEachScanTile }).addTo(map);
+  /** Highlights the scan_tiles bbox currently being processed by ScannerService. */
+  const scannerWorkLayer = L.layerGroup().addTo(map);
+  /** Updated by fast /api/viewer/scan-active.json poll; `undefined` = no successful poll yet. */
+  var lastActiveScanCache = undefined;
+
+  async function pollScanActiveForMap() {
+    try {
+      const j = await loadJson('/api/viewer/scan-active.json');
+      lastActiveScanCache = j && j.activeScan != null ? j.activeScan : null;
+      syncScannerActiveHighlight({ activeScan: lastActiveScanCache });
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function redrawActiveScanOverlayFromCache() {
+    if (lastActiveScanCache === undefined) {
+      return;
+    }
+    syncScannerActiveHighlight({ activeScan: lastActiveScanCache });
+  }
+  const parcelsLayer = L.geoJSON(null, {
+    style: { color: '#1565c0', weight: 1, fillOpacity: 0.08 },
+  });
+  const addressesLayer = L.geoJSON(null, {
+    pointToLayer: function (feature, latlng) {
+      const z = map.getZoom();
+      const radius = z >= 14 ? 5 : z >= 12 ? 4 : 3;
+      return L.circleMarker(latlng, {
+        radius: radius,
+        fillOpacity: 0.85,
+        color: '#333',
+        weight: 1,
+        fillColor: '#7b1fa2',
+      });
+    },
+  });
+
+  function bboxParams(bounds) {
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
+    return new URLSearchParams({
+      minLon: String(sw.lng),
+      minLat: String(sw.lat),
+      maxLon: String(ne.lng),
+      maxLat: String(ne.lat),
+    });
+  }
+
+  let timer = null;
+  function scheduleLoad() {
+    clearTimeout(timer);
+    timer = setTimeout(loadVisible, 280);
+  }
+
+  async function loadJson(url) {
+    const r = await fetch(url);
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(t.slice(0, 200) || r.statusText);
+    }
+    return r.json();
+  }
+
+  async function loadVisible() {
+    showErr('');
+    const b = map.getBounds();
+    const span = Math.max(
+      Math.abs(b.getEast() - b.getWest()),
+      Math.abs(b.getNorth() - b.getSouth()),
+    );
+    if (span > 15.05) {
+      showErr('Приблизьте карту: вид слишком широкий для сервера (лимит ~15° по стороне).');
+      tilesLayer.clearLayers();
+      parcelsLayer.clearLayers();
+      addressesLayer.clearLayers();
+      redrawActiveScanOverlayFromCache();
+      return;
+    }
+
+    const q = bboxParams(b);
+    const zoom = map.getZoom();
+
+    try {
+      if (document.getElementById('ly-tiles').checked) {
+        const gj = await loadJson('/api/viewer/scan-tiles.geojson?' + q.toString());
+        tilesLayer.clearLayers();
+        const mergedFeats = mergeScanTileFeaturesByBbox(gj.features || []);
+        tilesLayer.addData({ type: 'FeatureCollection', features: mergedFeats });
+      } else {
+        tilesLayer.clearLayers();
+      }
+
+      if (document.getElementById('ly-parcels').checked && zoom >= ZOOM_PARCELS_MIN) {
+        const gj = await loadJson('/api/viewer/parcels.geojson?' + q.toString());
+        parcelsLayer.clearLayers();
+        parcelsLayer.addData(gj);
+        if (!map.hasLayer(parcelsLayer)) parcelsLayer.addTo(map);
+      } else {
+        parcelsLayer.clearLayers();
+        map.removeLayer(parcelsLayer);
+      }
+
+      if (document.getElementById('ly-addresses').checked && zoom >= ZOOM_ADDRESSES_MIN) {
+        const gj = await loadJson('/api/viewer/addresses.geojson?' + q.toString());
+        addressesLayer.clearLayers();
+        addressesLayer.addData(gj);
+        if (!map.hasLayer(addressesLayer)) addressesLayer.addTo(map);
+      } else {
+        addressesLayer.clearLayers();
+        map.removeLayer(addressesLayer);
+      }
+    } catch (e) {
+      showErr(e.message || String(e));
+    }
+    redrawActiveScanOverlayFromCache();
+  }
+
+  function ruLayerKind(lk) {
+    if (lk === 'addresses') return 'адреса';
+    if (lk === 'parcels') return 'участки';
+    return String(lk);
+  }
+  function ruScanStatus(st) {
+    if (st === 'pending') return 'в очереди';
+    if (st === 'done') return 'готово';
+    if (st === 'failed') return 'ошибка';
+    return String(st);
+  }
+
+  function syncScannerActiveHighlight(s) {
+    scannerWorkLayer.clearLayers();
+    var a = s && s.activeScan;
+    if (!a || a.tileKey == null) return;
+    var mnLo = Math.min(a.minLon, a.maxLon);
+    var mxLo = Math.max(a.minLon, a.maxLon);
+    var mnLa = Math.min(a.minLat, a.maxLat);
+    var mxLa = Math.max(a.minLat, a.maxLat);
+    var hl = L.rectangle(
+      [[mnLa, mnLo], [mxLa, mxLo]],
+      {
+        pane: 'ncaScannerActive',
+        interactive: false,
+        color: '#880e4f',
+        weight: 4,
+        fillColor: '#f50057',
+        fillOpacity: 0.22,
+        dashArray: '12 6',
+      },
+    ).addTo(scannerWorkLayer);
+    if (typeof hl.bringToFront === 'function') {
+      hl.bringToFront();
+    }
+  }
+
+  async function loadStats() {
+    const el = document.getElementById('stats');
+    try {
+      const s = await loadJson('/api/viewer/stats');
+      const rows = (s.scanTiles && s.scanTiles.byLayer) || [];
+      const breakdown = rows.length
+        ? rows.map(function (r) {
+            return ruLayerKind(r.layerKind) + ' / ' + ruScanStatus(r.status) + ': ' + r.count;
+          }).join('<br/>')
+        : '—';
+      var act = lastActiveScanCache === undefined ? s.activeScan : lastActiveScanCache;
+      var actLine = '—';
+      if (act && act.tileKey) {
+        var tk = act.tileKey;
+        var tkDisp = tk.length > 32 ? escapeHtml(tk.slice(0, 32)) + '…' : escapeHtml(tk);
+        actLine =
+          ruLayerKind(act.layerKind) + ', регион <code>' + escapeHtml(act.regionId) + '</code><br/>' +
+          '<span class="meta">ключ: ' + tkDisp + '</span>';
+      }
+      el.innerHTML =
+        '<dt>Адресных точек</dt><dd>' + s.addressCount.toLocaleString('ru-RU') + '</dd>' +
+        '<dt>Земельных участков</dt><dd>' + s.parcelCount.toLocaleString('ru-RU') + '</dd>' +
+        '<dt>Скан-тайлы</dt><dd>всего ' + s.scanTiles.total.toLocaleString('ru-RU') +
+        ' — готово ' + s.scanTiles.done.toLocaleString('ru-RU') +
+        ', в очереди ' + s.scanTiles.pending.toLocaleString('ru-RU') +
+        ', ошибка ' + s.scanTiles.failed.toLocaleString('ru-RU') + '</dd>' +
+        '<dt>По слою и статусу</dt><dd>' + breakdown + '</dd>' +
+        '<dt>Сейчас в работе сканера</dt><dd>' + actLine + '</dd>';
+    } catch (e) {
+      el.textContent = 'Статистика недоступна: ' + (e.message || e);
+    }
+  }
+
+  map.on('moveend', scheduleLoad);
+  ['ly-tiles', 'ly-parcels', 'ly-addresses'].forEach(function (id) {
+    document.getElementById(id).addEventListener('change', scheduleLoad);
+  });
+  setInterval(function () {
+    void loadStats();
+  }, 2500);
+  setInterval(function () {
+    void pollScanActiveForMap();
+  }, 600);
+
+  map.whenReady(function () {
+    map.invalidateSize(false);
+    map.fitBounds(BELARUS_BOUNDS, {
+      padding: [40, 40],
+      animate: false,
+    });
+    var z0 = map.getZoom();
+    if (z0 < map.getMaxZoom()) {
+      map.setZoom(z0 + 1, { animate: false });
+    }
+    void pollScanActiveForMap();
+    void loadStats();
+    // Load scan bboxes for the viewport at this zoom immediately (not only after moveend debounce).
+    void loadVisible();
+  });
+})();
+  </script>
+</body>
+</html>

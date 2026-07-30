@@ -1,0 +1,10 @@
+---
+description: English for code, docs, userscript UI
+alwaysApply: true
+---
+
+# Language
+
+- **Source comments, logs, README, commit messages, Cursor rules:** English.
+- **Userscript** (`wme-nca-addresses-nearby.user.js`): English `@name` / `@description` / UI.
+- Keep non-English literals only when required for functionality (e.g. NCA Cyrillic street names from upstream).

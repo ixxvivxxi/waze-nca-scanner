@@ -1,0 +1,39 @@
+name: waze-nca-scanner
+
+services:
+  api:
+    image: ${WAZE_NCA_SCANNER_IMAGE:-waze-nca-scanner-api:local}
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    container_name: waze-nca-scanner-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      PORT: 3000
+      GEOSERVER_BASE: ${GEOSERVER_BASE:-https://map.nca.by/geoserver/pcm/ows}
+      GEOSERVER_REFERER: ${GEOSERVER_REFERER:-https://map.nca.by/}
+      WMS_ADDRESS_LAYER: ${WMS_ADDRESS_LAYER:-pcm:841cf07c-b35f-4012-a364-000000000002}
+      WMS_PARCEL_LAYER: ${WMS_PARCEL_LAYER:-pcm:294b19b9-3259-44e5-b8e8-5314b0adf928}
+      WFS_ADDRESS_TYPENAME: ${WFS_ADDRESS_TYPENAME:-841cf07c-b35f-4012-a364-000000000002}
+      WFS_PARCEL_TYPENAME: ${WFS_PARCEL_TYPENAME:-294b19b9-3259-44e5-b8e8-5314b0adf928}
+      SCANNER_WFS_SUBDIVIDE: ${SCANNER_WFS_SUBDIVIDE:-4}
+      SCANNER_WFS_SATURATED_AT: ${SCANNER_WFS_SATURATED_AT:-2500}
+      REQUEST_DELAY_MS: ${REQUEST_DELAY_MS:-800}
+      HTTP_TIMEOUT_MS: ${HTTP_TIMEOUT_MS:-45000}
+      SCAN_CRON: ${SCAN_CRON:-}
+      SCAN_USE_WEEKLY_SPREAD: ${SCAN_USE_WEEKLY_SPREAD:-true}
+      SCAN_INTERVAL_MS: ${SCAN_INTERVAL_MS:-86400000}
+      MAX_QUAD_DEPTH: ${MAX_QUAD_DEPTH:-12}
+      SCAN_TILES_PER_RUN: ${SCAN_TILES_PER_RUN:-1}
+      SCAN_RESCAN_AFTER_MS: ${SCAN_RESCAN_AFTER_MS:-604800000}
+    ports:
+      - '127.0.0.1:${HOST_HTTP_PORT:-8097}:3000'
+    networks:
+      - postgres_app-network
+      - default
+
+networks:
+  postgres_app-network:
+    external: true
+    name: postgres_app-network

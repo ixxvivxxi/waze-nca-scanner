@@ -1,0 +1,17 @@
+# Local / VPS secrets — never commit
+.env
+.env.prod
+server/.env
+deploy/.env.prod
+
+# Nominatim/OSM JSON used only to regenerate belarus-oblast-rings.generated.ts
+server/tmp-by-oblast/
+
+# Node
+server/node_modules/
+server/dist/
+
+# OS / IDE
+.DS_Store
+.idea/
+*.log
