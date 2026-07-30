@@ -101,10 +101,10 @@
   map.getPane('ncaScannerActive').style.zIndex = '660';
   map.getPane('ncaScannerActive').style.pointerEvents = 'none';
 
-  /** ~1.4 weeks: one weekly queue sweep + slack so tiles are not orange right before their turn. */
-  const MS_DATA_FRESH = 10 * 24 * 60 * 60 * 1000;
-  /** ~3 weeks without refresh — likely missed cycles or stalled scanner. */
-  const MS_DATA_STALE = 21 * 24 * 60 * 60 * 1000;
+  /** ~2.5 weeks: one ~14-day queue sweep + slack so tiles are not orange right before their turn. */
+  const MS_DATA_FRESH = 18 * 24 * 60 * 60 * 1000;
+  /** ~5 weeks without refresh — likely missed cycles or stalled scanner. */
+  const MS_DATA_STALE = 35 * 24 * 60 * 60 * 1000;
 
   function lastDataFetchedMs(p) {
     if (!p || p.lastDataFetchedAt == null) return null;

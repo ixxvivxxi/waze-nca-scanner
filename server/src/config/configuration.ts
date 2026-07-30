@@ -15,10 +15,13 @@ export interface AppConfig {
   scanCron: string;
   scanIntervalMs: number;
   /**
-   * When true and SCAN_CRON is empty: delay between ticks = (7×24 h)×SCAN_TILES_PER_RUN / scan_tiles row count
-   * so the full queue is touched about once per week at steady state.
+   * When true and SCAN_CRON is empty: delay between ticks =
+   * (SCAN_FULL_PASS_DAYS×24 h)×SCAN_TILES_PER_RUN / address scan_tiles count
+   * so the full queue is touched about once per that many days at steady state.
    */
   scanUseWeeklySpreadInterval: boolean;
+  /** Target days for one full pass over all address scan_tiles (default 14). */
+  scanFullPassDays: number;
   scanTilesPerRun: number;
   /** Re-run GeoServer scan for a tile after this many ms since last_scan_completed_at (done tiles). */
   scanRescanAfterMs: number;
@@ -83,10 +86,14 @@ export default (): AppConfig => ({
       .toLowerCase();
     return r !== '0' && r !== 'false' && r !== 'no' && r !== 'off';
   })(),
+  scanFullPassDays: Math.max(
+    1,
+    Number(process.env.SCAN_FULL_PASS_DAYS ?? 14),
+  ),
   scanTilesPerRun: Math.max(1, Number(process.env.SCAN_TILES_PER_RUN ?? 1)),
   scanRescanAfterMs: Math.max(
     60_000,
-    Number(process.env.SCAN_RESCAN_AFTER_MS ?? 604_800_000),
+    Number(process.env.SCAN_RESCAN_AFTER_MS ?? 1_209_600_000),
   ),
   maxQuadDepth: Math.max(0, Number(process.env.MAX_QUAD_DEPTH ?? 12)),
   scannerWfsSubdivide: Math.min(

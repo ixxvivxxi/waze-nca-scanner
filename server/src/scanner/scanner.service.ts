@@ -33,21 +33,26 @@ export interface ScannerActiveTile {
   maxLat: number;
 }
 
-/** One calendar week in ms (7 × 24 h). */
-const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
-const MIN_WEEKLY_SPREAD_DELAY_MS = 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const MIN_SPREAD_DELAY_MS = 1000;
 
 /**
- * Time between ticks so that `tilesPerRun` tiles each tick cycles all `tileCount` rows in ~one week.
- * Formula: (7×24 h) / (tileCount / tilesPerRun) = MS_PER_WEEK × tilesPerRun / tileCount.
+ * Time between ticks so that `tilesPerRun` tiles each tick cycles all `tileCount` rows
+ * in about `fullPassDays` days.
+ * Formula: (fullPassDays×24 h) × tilesPerRun / tileCount.
  */
-function delayMsForWeeklySpreadAllTiles(
+function delayMsForFullPassSpread(
   tileCount: number,
   tilesPerRun: number,
+  fullPassDays: number,
 ): number {
   const n = Math.max(1, Math.floor(tileCount));
   const k = Math.max(1, Math.floor(tilesPerRun));
-  return Math.max(MIN_WEEKLY_SPREAD_DELAY_MS, Math.floor((MS_PER_WEEK * k) / n));
+  const days = Math.max(1, Math.floor(fullPassDays));
+  return Math.max(
+    MIN_SPREAD_DELAY_MS,
+    Math.floor((days * MS_PER_DAY * k) / n),
+  );
 }
 
 @Injectable()
@@ -100,10 +105,16 @@ export class ScannerService
           1,
           Number(this.config.get('scanTilesPerRun') ?? 1),
         );
+        const fullPassDays = Math.max(
+          1,
+          Number(this.config.get('scanFullPassDays') ?? 14),
+        );
         const nextMs =
-          n <= 0 ? 60_000 : delayMsForWeeklySpreadAllTiles(n, perRun);
+          n <= 0
+            ? 60_000
+            : delayMsForFullPassSpread(n, perRun, fullPassDays);
         this.log.log(
-          `Scheduled scan: weekly spread over scan_tiles (rows=${n}, ${perRun} tile(s)/tick → ~${Math.round(nextMs / 1000)}s until next tick; target one full pass / week)`,
+          `Scheduled scan: spread over scan_tiles (rows=${n}, ${perRun} tile(s)/tick → ~${Math.round(nextMs / 1000)}s until next tick; target one full pass / ${fullPassDays} day(s))`,
         );
         void this.runTickThenScheduleWeeklySpread();
       } else {
@@ -150,13 +161,21 @@ export class ScannerService
       clearTimeout(this.spreadTimeoutRef);
       this.spreadTimeoutRef = null;
     }
-    const total = await this.scanTiles.count();
+    const total = await this.scanTiles.count({
+      where: { layerKind: 'addresses' },
+    });
     const perRun = Math.max(
       1,
       Number(this.config.get('scanTilesPerRun') ?? 1),
     );
+    const fullPassDays = Math.max(
+      1,
+      Number(this.config.get('scanFullPassDays') ?? 14),
+    );
     const delayMs =
-      total <= 0 ? 60_000 : delayMsForWeeklySpreadAllTiles(total, perRun);
+      total <= 0
+        ? 60_000
+        : delayMsForFullPassSpread(total, perRun, fullPassDays);
     this.spreadTimeoutRef = setTimeout(() => {
       this.spreadTimeoutRef = null;
       void this.runTickThenScheduleWeeklySpread();
