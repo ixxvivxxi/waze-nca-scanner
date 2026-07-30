@@ -6,6 +6,7 @@ import { ScanTileEntity } from './scanner/entities/scan-tile.entity';
 import { InitSchema1714210000000 } from './migrations/1714210000000-InitSchema';
 import { ScanTileLastScanCompleted1745860000000 } from './migrations/1745860000000-ScanTileLastScanCompleted';
 import { ScanTileAutoScanDisabled1745960000000 } from './migrations/1745960000000-ScanTileAutoScanDisabled';
+import { DropParcelScanTiles1753900000000 } from './migrations/1753900000000-DropParcelScanTiles';
 
 dotenv.config();
 
@@ -17,6 +18,7 @@ export default new DataSource({
     InitSchema1714210000000,
     ScanTileLastScanCompleted1745860000000,
     ScanTileAutoScanDisabled1745960000000,
+    DropParcelScanTiles1753900000000,
   ],
   synchronize: false,
   logging: false,
