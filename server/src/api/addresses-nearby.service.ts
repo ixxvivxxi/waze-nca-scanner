@@ -14,37 +14,6 @@ export interface NearbyAddressRow {
 export class AddressesNearbyService {
   constructor(@InjectDataSource() private readonly ds: DataSource) {}
 
-  /** Normalized "street line" from JSON properties: type + name, lowercased and trimmed. */
-  private readonly streetKeySql = `
-    lower(trim(
-      concat_ws(' ',
-        nullif(trim(coalesce(properties->>'element_type_name', '')), ''),
-        nullif(trim(coalesce(properties->>'element_name', '')), '')
-      )
-    ))
-  `;
-
-  /** Normalized house number from JSON properties: building_number + building_index. */
-  private readonly houseKeySql = `
-    lower(trim(
-      concat(
-        nullif(trim(coalesce(properties->>'building_number', '')), ''),
-        nullif(trim(coalesce(properties->>'building_index', '')), '')
-      )
-    ))
-  `;
-
-  /** Presence checks for parcel fallback address quality (street + house fields must be explicit). */
-  private readonly streetPresentSql = `
-    nullif(trim(coalesce(properties->>'element_name', '')), '') IS NOT NULL
-  `;
-  private readonly housePresentSql = `
-    nullif(trim(coalesce(properties->>'building_number', '')), '') IS NOT NULL
-  `;
-  private readonly purposeCodeAllowedSql = `
-    trim(coalesce(properties->>'purpose_code', '')) = '19'
-  `;
-
   async findNearby(
     lon: number,
     lat: number,
@@ -75,71 +44,15 @@ export class AddressesNearbyService {
     >(
       `WITH req AS (
          SELECT ST_SetSRID(ST_MakePoint($1::float8, $2::float8), 4326)::geography AS p
-       ),
-       ap AS (
-         SELECT
-           a.id_adr::text AS id_adr,
-           ST_X(a.geom::geometry)::float8 AS lon,
-           ST_Y(a.geom::geometry)::float8 AS lat,
-           a.properties,
-           ST_Distance(a.geom::geography, req.p)::float8 AS distance_m,
-           ${this.streetKeySql} AS street_key,
-           ${this.houseKeySql} AS house_key
-         FROM address_points a, req
-         WHERE ST_DWithin(a.geom::geography, req.p, $3::float8)
-       ),
-       ap_keys AS (
-         SELECT DISTINCT street_key, house_key
-         FROM ap
-         WHERE street_key <> '' AND house_key <> ''
-       ),
-       lp_raw AS (
-         SELECT
-           ('parcel:' || p.wfs_feature_id)::text AS id_adr,
-           ST_X(ST_Centroid(p.geom::geometry))::float8 AS lon,
-           ST_Y(ST_Centroid(p.geom::geometry))::float8 AS lat,
-           p.properties,
-           ST_Distance(ST_Centroid(p.geom::geometry)::geography, req.p)::float8 AS distance_m,
-           lower(trim(
-             concat_ws(' ',
-               nullif(trim(coalesce(p.properties->>'element_type_name', '')), ''),
-               nullif(trim(coalesce(p.properties->>'element_name', '')), '')
-             )
-           )) AS street_key,
-           lower(trim(
-             concat(
-               nullif(trim(coalesce(p.properties->>'building_number', '')), ''),
-               nullif(trim(coalesce(p.properties->>'building_index', '')), '')
-             )
-           )) AS house_key
-         FROM land_parcels p, req
-         WHERE ST_DWithin(ST_Centroid(p.geom::geometry)::geography, req.p, $3::float8)
-       ),
-       lp AS (
-         SELECT
-           l.id_adr,
-           l.lon,
-           l.lat,
-           l.properties,
-           l.distance_m
-         FROM lp_raw l
-         WHERE l.street_key <> '' AND l.house_key <> ''
-           AND ${this.streetPresentSql}
-           AND ${this.housePresentSql}
-           AND ${this.purposeCodeAllowedSql}
-           AND NOT EXISTS (
-             SELECT 1
-             FROM ap_keys k
-             WHERE k.street_key = l.street_key
-               AND k.house_key = l.house_key
-           )
        )
-       SELECT id_adr, lon, lat, properties, distance_m
-       FROM (
-         SELECT id_adr, lon, lat, properties, distance_m FROM ap
-         UNION ALL
-         SELECT id_adr, lon, lat, properties, distance_m FROM lp
-       ) s
+       SELECT
+         a.id_adr::text AS id_adr,
+         ST_X(a.geom::geometry)::float8 AS lon,
+         ST_Y(a.geom::geometry)::float8 AS lat,
+         a.properties,
+         ST_Distance(a.geom::geography, req.p)::float8 AS distance_m
+       FROM address_points a, req
+       WHERE ST_DWithin(a.geom::geography, req.p, $3::float8)
        ORDER BY distance_m ASC
        LIMIT $4::int`,
       [lon, lat, radiusM, limit],
@@ -211,72 +124,16 @@ export class AddressesNearbyService {
        ),
        ctr AS (
          SELECT ST_SetSRID(ST_MakePoint($5::float8, $6::float8), 4326)::geography AS p
-       ),
-       ap AS (
-         SELECT
-           a.id_adr::text AS id_adr,
-           ST_X(a.geom::geometry)::float8 AS lon,
-           ST_Y(a.geom::geometry)::float8 AS lat,
-           a.properties,
-           ST_Distance(a.geom::geography, ctr.p)::float8 AS distance_m,
-           ${this.streetKeySql} AS street_key,
-           ${this.houseKeySql} AS house_key
-         FROM address_points a, env, ctr
-         WHERE a.geom && env.e
-           AND ST_Intersects(a.geom::geometry, env.e)
-       ),
-       ap_keys AS (
-         SELECT DISTINCT street_key, house_key
-         FROM ap
-         WHERE street_key <> '' AND house_key <> ''
-       ),
-       lp_raw AS (
-         SELECT
-           ('parcel:' || p.wfs_feature_id)::text AS id_adr,
-           ST_X(ST_Centroid(p.geom::geometry))::float8 AS lon,
-           ST_Y(ST_Centroid(p.geom::geometry))::float8 AS lat,
-           p.properties,
-           ST_Distance(ST_Centroid(p.geom::geometry)::geography, ctr.p)::float8 AS distance_m,
-           lower(trim(
-             concat_ws(' ',
-               nullif(trim(coalesce(p.properties->>'element_type_name', '')), ''),
-               nullif(trim(coalesce(p.properties->>'element_name', '')), '')
-             )
-           )) AS street_key,
-           lower(trim(
-             concat(
-               nullif(trim(coalesce(p.properties->>'building_number', '')), ''),
-               nullif(trim(coalesce(p.properties->>'building_index', '')), '')
-             )
-           )) AS house_key
-         FROM land_parcels p, env, ctr
-         WHERE ST_Intersects(ST_Centroid(p.geom::geometry), env.e)
-       ),
-       lp AS (
-         SELECT
-           l.id_adr,
-           l.lon,
-           l.lat,
-           l.properties,
-           l.distance_m
-         FROM lp_raw l
-         WHERE l.street_key <> '' AND l.house_key <> ''
-           AND ${this.streetPresentSql}
-           AND ${this.housePresentSql}
-           AND ${this.purposeCodeAllowedSql}
-           AND NOT EXISTS (
-             SELECT 1
-             FROM ap_keys k
-             WHERE k.street_key = l.street_key
-               AND k.house_key = l.house_key
-           )
        )
-       SELECT id_adr, lon, lat, properties, distance_m
-       FROM (
-         SELECT id_adr, lon, lat, properties, distance_m FROM ap
-         UNION ALL
-         SELECT id_adr, lon, lat, properties, distance_m FROM lp
-       ) s
+       SELECT
+         a.id_adr::text AS id_adr,
+         ST_X(a.geom::geometry)::float8 AS lon,
+         ST_Y(a.geom::geometry)::float8 AS lat,
+         a.properties,
+         ST_Distance(a.geom::geography, ctr.p)::float8 AS distance_m
+       FROM address_points a, env, ctr
+       WHERE a.geom && env.e
+         AND ST_Intersects(a.geom::geometry, env.e)
        ORDER BY distance_m ASC
        LIMIT $7::int`,
       [

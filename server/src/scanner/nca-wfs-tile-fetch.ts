@@ -12,7 +12,7 @@ const WFS_STRATEGIES: WfsGetFeatureStrategy[] = [
   'wfs20-3857',
 ];
 
-export type NcaWfsTileLayerKind = 'addresses' | 'parcels';
+export type NcaWfsTileLayerKind = 'addresses';
 
 function stringifyProp(v: unknown): string {
   if (v == null) return '';
@@ -23,18 +23,12 @@ function stringifyProp(v: unknown): string {
   return '';
 }
 
-function dedupeKey(layerKind: NcaWfsTileLayerKind, f: GeoJsonFeature): string {
+function dedupeKey(_layerKind: NcaWfsTileLayerKind, f: GeoJsonFeature): string {
   const p = f.properties ?? {};
-  if (layerKind === 'addresses') {
-    const ida = stringifyProp(p.id_adr);
-    if (ida !== '') return `a:${ida}`;
-    if (f.id != null) return `a:id:${String(f.id)}`;
-    return `a:${JSON.stringify(p).slice(0, 120)}`;
-  }
-  if (f.id != null) return `p:${String(f.id)}`;
-  const oid = stringifyProp(p.object_id);
-  if (oid !== '') return `p:o:${oid}`;
-  return `p:${JSON.stringify(p).slice(0, 120)}`;
+  const ida = stringifyProp(p.id_adr);
+  if (ida !== '') return `a:${ida}`;
+  if (f.id != null) return `a:id:${String(f.id)}`;
+  return `a:${JSON.stringify(p).slice(0, 120)}`;
 }
 
 /** WGS84 sub-rectangle sx,sy in [0, parts)² covering [minX,maxX]×[minY,maxY]. */

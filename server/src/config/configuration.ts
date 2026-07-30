@@ -5,9 +5,7 @@ export interface AppConfig {
   geoserverWfsBase: string;
   geoserverReferer: string;
   wmsAddressLayer: string;
-  wmsParcelLayer: string;
   wfsAddressTypename: string;
-  wfsParcelTypename: string;
   wmsWidth: number;
   wmsHeight: number;
   wmsFeatureCount: number;
@@ -66,12 +64,8 @@ export default (): AppConfig => ({
   geoserverReferer: process.env.GEOSERVER_REFERER ?? 'https://map.nca.by/',
   wmsAddressLayer:
     process.env.WMS_ADDRESS_LAYER ?? 'pcm:841cf07c-b35f-4012-a364-000000000002',
-  wmsParcelLayer:
-    process.env.WMS_PARCEL_LAYER ?? 'pcm:294b19b9-3259-44e5-b8e8-5314b0adf928',
   wfsAddressTypename:
     process.env.WFS_ADDRESS_TYPENAME ?? '841cf07c-b35f-4012-a364-000000000002',
-  wfsParcelTypename:
-    process.env.WFS_PARCEL_TYPENAME ?? '294b19b9-3259-44e5-b8e8-5314b0adf928',
   wmsWidth: Number(process.env.WMS_WIDTH ?? 512),
   wmsHeight: Number(process.env.WMS_HEIGHT ?? 512),
   wmsFeatureCount: Number(process.env.WMS_FEATURE_COUNT ?? 50),

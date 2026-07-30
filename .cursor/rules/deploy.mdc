@@ -8,7 +8,9 @@ alwaysApply: false
 
 - VPS: `95.128.71.94`, SSH host **`myvps-tunnel`**, user **`ster`**, key `~/.ssh/id_ed25519_autossh`.
 - App path on VPS: `~/waze-nca-scanner`. Secrets: `deploy/.env.prod` (gitignored).
-- Redeploy: `chmod +x ~/waze-nca-scanner/deploy/*.sh && cd ~/waze-nca-scanner/deploy && ./deploy.sh`
+- Image: `ghcr.io/ixxvivxxi/waze-nca-scanner:latest` (built by GHA, pulled on VPS).
+- Redeploy: GHA on push to `main`, or manually `cd ~/waze-nca-scanner/deploy && ./deploy.sh`.
 - Compose binds API to **127.0.0.1:8097**; public only via nginx on **443** (`waze-nca-scanner.ster.by`).
 - DB: shared **`main-postgres`** on `postgres_app-network` — image must be **`postgis/postgis:16-3.4`** (managed in `~/postgres` on VPS). Database/role: `nca_scanner`.
+- GHA secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`.
 - Do not open 8097 on the public interface. Do not commit `.env.prod`.

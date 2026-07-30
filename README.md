@@ -1,6 +1,6 @@
 # Waze NCA Scanner
 
-NestJS service that scans [map.nca.by](https://map.nca.by/) (WFS) and stores address points / land parcels in **Postgres + PostGIS**. WME userscript draws nearby addresses on the map.
+NestJS service that scans [map.nca.by](https://map.nca.by/) (WFS) and stores **address points** in **Postgres + PostGIS**. WME userscript draws nearby addresses on the map.
 
 | Piece | Path | Role |
 |-------|------|------|
@@ -30,9 +30,15 @@ npm run migration:run
 npm run start:dev             # http://127.0.0.1:3000
 ```
 
-## Manual deploy (VPS)
+## Deploy (VPS)
 
 SSH host **`myvps-tunnel`**, user **`ster`**, app path `~/waze-nca-scanner`.
+
+CI (`.github/workflows/deploy.yml`) on push to `main`: builds `ghcr.io/ixxvivxxi/waze-nca-scanner`, SSHs to the VPS, `git pull` + `deploy/deploy.sh` (compose pull + up).
+
+**GitHub Actions secrets:** `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`.
+
+After the first successful publish, set the GHCR package visibility to **Public** (or `docker login ghcr.io` on the VPS) so the host can pull.
 
 ### Shared Postgres → PostGIS (once)
 
@@ -57,9 +63,9 @@ docker exec -e PGPASSWORD=… main-postgres \
   psql -U ster -d nca_scanner -c "ALTER DATABASE nca_scanner OWNER TO nca_scanner;"
 ```
 
-### App deploy
+### First-time / manual deploy
 
-1. Sync this repo to `~/waze-nca-scanner`, fill `deploy/.env.prod` from `.env.prod.example`.
+1. Clone this repo to `~/waze-nca-scanner`, fill `deploy/.env.prod` from `.env.prod.example` (`WAZE_NCA_SCANNER_IMAGE=ghcr.io/ixxvivxxi/waze-nca-scanner:latest`).
 2. `cd ~/waze-nca-scanner/deploy && chmod +x deploy.sh && ./deploy.sh`
 3. Host nginx + Let's Encrypt:
 
@@ -68,6 +74,12 @@ docker exec -e PGPASSWORD=… main-postgres \
 ```
 
 Compose binds API on **127.0.0.1:8097** only; public access via nginx on 443.
+
+Manual redeploy on the VPS (after CI has published an image):
+
+```bash
+cd ~/waze-nca-scanner/deploy && ./deploy.sh
+```
 
 ### Data migrate from local
 

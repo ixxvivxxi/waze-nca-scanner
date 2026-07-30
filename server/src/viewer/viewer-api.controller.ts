@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Controller,
   Get,
   Header,
@@ -64,21 +63,8 @@ export class ViewerApiController {
     );
   }
 
-  @Get('parcels.geojson')
-  @Header('Cache-Control', 'no-store')
-  getParcels(
-    @Query('minLon') minLon: string,
-    @Query('minLat') minLat: string,
-    @Query('maxLon') maxLon: string,
-    @Query('maxLat') maxLat: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.viewer.getParcelsGeoJson(minLon, minLat, maxLon, maxLat, limit);
-  }
-
   /**
-   * Live WFS GetFeature for a bbox (WGS84 and 3857 strategies + paging), upsert into DB.
-   * Query: layerKind=addresses|parcels
+   * Live WFS GetFeature for a bbox + upsert address points into DB.
    */
   @Get('nca-live.geojson')
   @Header('Cache-Control', 'no-store')
@@ -87,17 +73,7 @@ export class ViewerApiController {
     @Query('minLat') minLat: string,
     @Query('maxLon') maxLon: string,
     @Query('maxLat') maxLat: string,
-    @Query('layerKind') layerKind: string,
   ) {
-    if (layerKind !== 'addresses' && layerKind !== 'parcels') {
-      throw new BadRequestException('layerKind must be addresses or parcels');
-    }
-    return this.ncaSample.sampleLiveNca(
-      minLon,
-      minLat,
-      maxLon,
-      maxLat,
-      layerKind,
-    );
+    return this.ncaSample.sampleLiveNca(minLon, minLat, maxLon, maxLat);
   }
 }

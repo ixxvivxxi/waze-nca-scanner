@@ -172,7 +172,7 @@ export class ScannerService
   }
 
   /**
-   * Drops all scan queue rows and inserts the full Belarus seed grid for both layers.
+   * Drops all scan queue rows and inserts the full Belarus seed grid (address layer only).
    * Does not modify address_points or land_parcels.
    */
   async reseedScanTiles(): Promise<void> {
@@ -197,7 +197,7 @@ export class ScannerService
   }
 
   private async insertAllSeedTiles(): Promise<void> {
-    const layers: ScanLayerKind[] = ['addresses', 'parcels'];
+    const layerKind: ScanLayerKind = 'addresses';
     for (const group of BELARUS_TILE_GROUPS) {
       for (const box of group.bboxes) {
         const t: LonLatTile = {
@@ -209,25 +209,23 @@ export class ScannerService
           depth: 0,
           parentTileKey: null,
         };
-        for (const layerKind of layers) {
-          const tileKey = makeTileKey(layerKind, t);
-          await this.scanTiles.query(
-            `INSERT INTO scan_tiles (layer_kind, region_id, min_lon, min_lat, max_lon, max_lat, tile_key, status, depth, parent_tile_key, retry_count, auto_scan_disabled)
+        const tileKey = makeTileKey(layerKind, t);
+        await this.scanTiles.query(
+          `INSERT INTO scan_tiles (layer_kind, region_id, min_lon, min_lat, max_lon, max_lat, tile_key, status, depth, parent_tile_key, retry_count, auto_scan_disabled)
              VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,0,false)
              ON CONFLICT (tile_key) DO NOTHING`,
-            [
-              layerKind,
-              t.regionId,
-              t.minLon,
-              t.minLat,
-              t.maxLon,
-              t.maxLat,
-              tileKey,
-              t.depth,
-              t.parentTileKey,
-            ],
-          );
-        }
+          [
+            layerKind,
+            t.regionId,
+            t.minLon,
+            t.minLat,
+            t.maxLon,
+            t.maxLat,
+            tileKey,
+            t.depth,
+            t.parentTileKey,
+          ],
+        );
       }
     }
   }
@@ -259,7 +257,8 @@ export class ScannerService
     const rescanSec = Math.max(60, Math.floor(rescanMs / 1000));
     const eligible = await this.scanTiles
       .createQueryBuilder('st')
-      .where(
+      .where('st.layer_kind = :addresses', { addresses: 'addresses' })
+      .andWhere(
         new Brackets((qb) => {
           qb.where('st.auto_scan_disabled = false').andWhere(
             new Brackets((qs) => {
@@ -321,6 +320,12 @@ export class ScannerService
   }
 
   private async processTileRow(row: ScanTileEntity): Promise<void> {
+    if (row.layerKind !== 'addresses') {
+      this.log.warn(
+        `Skipping non-address tile ${row.tileKey} (layer=${row.layerKind})`,
+      );
+      return;
+    }
     this.activeTile = {
       tileKey: row.tileKey,
       layerKind: row.layerKind,
@@ -331,21 +336,12 @@ export class ScannerService
       maxLat: row.maxLat,
     };
     try {
-      const wmsLayer =
-        row.layerKind === 'addresses'
-          ? String(
-              this.config.get('viewerNcaWmsAddressLayer') ??
-                this.config.get('wmsAddressLayer') ??
-                'pcm:841cf07c-b35f-4012-a364-000000000002',
-            )
-          : String(
-              this.config.get('wmsParcelLayer') ??
-                'pcm:294b19b9-3259-44e5-b8e8-5314b0adf928',
-            );
-      const wfsTypename =
-        row.layerKind === 'addresses'
-          ? String(this.config.get('wfsAddressTypename') ?? '')
-          : String(this.config.get('wfsParcelTypename') ?? '');
+      const wmsLayer = String(
+        this.config.get('viewerNcaWmsAddressLayer') ??
+          this.config.get('wmsAddressLayer') ??
+          'pcm:841cf07c-b35f-4012-a364-000000000002',
+      );
+      const wfsTypename = String(this.config.get('wfsAddressTypename') ?? '');
       const typeNames = qualifiedWfsTypeNames(wmsLayer, wfsTypename);
       const subdiv = Number(this.config.get('scannerWfsSubdivide') ?? 4);
       const satAt = Number(this.config.get('scannerWfsSaturatedAt') ?? 2500);
@@ -354,7 +350,7 @@ export class ScannerService
       const merged = await fetchNcaWfsFeaturesForLonLatBBox({
         geo: this.geo,
         typeNames,
-        layerKind: row.layerKind,
+        layerKind: 'addresses',
         minLon: row.minLon,
         minLat: row.minLat,
         maxLon: row.maxLon,
@@ -365,13 +361,7 @@ export class ScannerService
       });
 
       const saturated = merged.length >= satAt;
-      let ingestedAddr = 0;
-      let ingestedParcels = 0;
-      if (row.layerKind === 'addresses') {
-        ingestedAddr = await this.ingest.upsertAddressFeatures(merged);
-      } else {
-        ingestedParcels = await this.ingest.upsertParcelFeatures(merged);
-      }
+      const ingestedAddr = await this.ingest.upsertAddressFeatures(merged);
       const emptyFromNca = merged.length === 0;
       const spanLon = row.maxLon - row.minLon;
       const spanLat = row.maxLat - row.minLat;
@@ -391,15 +381,15 @@ export class ScannerService
           depth: row.depth,
           parentTileKey: row.parentTileKey,
         };
-        const children = quadSplit(row.layerKind, lonLat);
+        const children = quadSplit('addresses', lonLat);
         for (const c of children) {
-          const tileKey = makeTileKey(row.layerKind, c);
+          const tileKey = makeTileKey('addresses', c);
           await this.scanTiles.query(
             `INSERT INTO scan_tiles (layer_kind, region_id, min_lon, min_lat, max_lon, max_lat, tile_key, status, depth, parent_tile_key, retry_count, auto_scan_disabled)
              VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,0,false)
              ON CONFLICT (tile_key) DO NOTHING`,
             [
-              row.layerKind,
+              'addresses',
               c.regionId,
               c.minLon,
               c.minLat,
@@ -412,11 +402,11 @@ export class ScannerService
           );
         }
         this.log.log(
-          `Quad-split tile ${row.tileKey} → ${children.length} children (${row.layerKind})`,
+          `Quad-split tile ${row.tileKey} → ${children.length} children (addresses)`,
         );
       }
       this.log.log(
-        `Tile done ${row.tileKey} [${row.layerKind}] depth=${row.depth} wfsFeatures=${merged.length} ingested addr=${ingestedAddr} parcels=${ingestedParcels} saturated=${saturated} autoDisabled=${emptyFromNca}`,
+        `Tile done ${row.tileKey} [addresses] depth=${row.depth} wfsFeatures=${merged.length} ingested addr=${ingestedAddr} saturated=${saturated} autoDisabled=${emptyFromNca}`,
       );
       if (emptyFromNca && !row.autoScanDisabled) {
         await this.scanTiles.update(

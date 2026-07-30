@@ -2,7 +2,7 @@ name: waze-nca-scanner
 
 services:
   api:
-    image: ${WAZE_NCA_SCANNER_IMAGE:-waze-nca-scanner-api:local}
+    image: ${WAZE_NCA_SCANNER_IMAGE:-ghcr.io/ixxvivxxi/waze-nca-scanner:latest}
     build:
       context: ../server
       dockerfile: Dockerfile
@@ -14,9 +14,7 @@ services:
       GEOSERVER_BASE: ${GEOSERVER_BASE:-https://map.nca.by/geoserver/pcm/ows}
       GEOSERVER_REFERER: ${GEOSERVER_REFERER:-https://map.nca.by/}
       WMS_ADDRESS_LAYER: ${WMS_ADDRESS_LAYER:-pcm:841cf07c-b35f-4012-a364-000000000002}
-      WMS_PARCEL_LAYER: ${WMS_PARCEL_LAYER:-pcm:294b19b9-3259-44e5-b8e8-5314b0adf928}
       WFS_ADDRESS_TYPENAME: ${WFS_ADDRESS_TYPENAME:-841cf07c-b35f-4012-a364-000000000002}
-      WFS_PARCEL_TYPENAME: ${WFS_PARCEL_TYPENAME:-294b19b9-3259-44e5-b8e8-5314b0adf928}
       SCANNER_WFS_SUBDIVIDE: ${SCANNER_WFS_SUBDIVIDE:-4}
       SCANNER_WFS_SATURATED_AT: ${SCANNER_WFS_SATURATED_AT:-2500}
       REQUEST_DELAY_MS: ${REQUEST_DELAY_MS:-800}

@@ -1,6 +1,7 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm'
 
-export type ScanLayerKind = 'addresses' | 'parcels'
+/** Historically also included `parcels`; scanner now seeds/processes addresses only. */
+export type ScanLayerKind = 'addresses'
 
 @Entity('scan_tiles')
 export class ScanTileEntity {

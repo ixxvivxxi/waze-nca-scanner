@@ -6,10 +6,10 @@ alwaysApply: false
 
 # Server API
 
-- NestJS + TypeORM + PostGIS. Tables: `address_points`, `land_parcels`, `scan_tiles`.
-- Background scan uses **WFS GetFeature** with `Referer: https://map.nca.by/`.
-- WME API: `GET /api/addresses/nearby`, `GET /api/addresses/bbox`.
+- NestJS + TypeORM + PostGIS. Tables: `address_points`, `scan_tiles` (legacy empty `land_parcels` may remain).
+- Background scan uses **WFS GetFeature** for **addresses only** with `Referer: https://map.nca.by/`.
+- WME API: `GET /api/addresses/nearby`, `GET /api/addresses/bbox` (address_points only).
 - Health: `GET /` → `{ ok, service: "nca-scanner" }`.
-- Viewer: `GET /viewer` + `/api/viewer/*`.
+- Viewer: `GET /viewer` + `/api/viewer/*` (no parcel layer).
 - Local: `server/.env` from `.env.example`; `docker compose up -d`; `npm run migration:run`; `npm run start:dev`.
 - CLI: `npm run scan:reseed` / `scan:reset`.

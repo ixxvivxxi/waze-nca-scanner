@@ -11,7 +11,6 @@ export type ViewerFeatureCollection = {
 
 export interface ViewerStats {
   addressCount: number;
-  parcelCount: number;
   scanTiles: {
     total: number;
     done: number;
@@ -32,7 +31,6 @@ const VIEWER_BBOX_MAX_SPAN_DEG = 15;
 const DEFAULT_LIMITS = {
   scanTiles: 50_000,
   addresses: 8_000,
-  parcels: 400,
 } as const;
 
 function parseBbox(
@@ -97,7 +95,6 @@ export class ViewerService {
     const [counts] = await this.ds.query<
       {
         address_count: string;
-        parcel_count: string;
         scan_total: string;
         scan_done: string;
         scan_pending: string;
@@ -106,7 +103,6 @@ export class ViewerService {
     >(
       `SELECT
          (SELECT COUNT(*) FROM address_points)::text AS address_count,
-         (SELECT COUNT(*) FROM land_parcels)::text AS parcel_count,
          (SELECT COUNT(*) FROM scan_tiles)::text AS scan_total,
          (SELECT COUNT(*) FROM scan_tiles WHERE status = 'done')::text AS scan_done,
          (SELECT COUNT(*) FROM scan_tiles WHERE status = 'pending')::text AS scan_pending,
@@ -124,7 +120,6 @@ export class ViewerService {
 
     return {
       addressCount: Number(counts.address_count),
-      parcelCount: Number(counts.parcel_count),
       scanTiles: {
         total: Number(counts.scan_total),
         done: Number(counts.scan_done),
@@ -165,8 +160,7 @@ export class ViewerService {
       DEFAULT_LIMITS.scanTiles,
     );
 
-    const layerFilter =
-      layerKind === 'addresses' || layerKind === 'parcels' ? layerKind : null;
+    const layerFilter = layerKind === 'addresses' ? layerKind : null;
 
     const [row] = await this.ds.query<{ geojson: ViewerFeatureCollection }[]>(
       `SELECT json_build_object(
@@ -191,33 +185,18 @@ export class ViewerService {
              'depth', st.depth,
              'retryCount', st.retry_count,
              'lastError', st.last_error,
-             'lastDataFetchedAt', CASE st.layer_kind
-               WHEN 'addresses' THEN (
-                 SELECT MAX(ap.fetched_at) FROM address_points ap
-                 WHERE ap.geom && ST_MakeEnvelope(
-                   st.min_lon, st.min_lat, st.max_lon, st.max_lat, 4326
-                 )
-                   AND ST_Intersects(
-                     ap.geom::geometry,
-                     ST_MakeEnvelope(
-                       st.min_lon, st.min_lat, st.max_lon, st.max_lat, 4326
-                     )
-                   )
+             'lastDataFetchedAt', (
+               SELECT MAX(ap.fetched_at) FROM address_points ap
+               WHERE ap.geom && ST_MakeEnvelope(
+                 st.min_lon, st.min_lat, st.max_lon, st.max_lat, 4326
                )
-               WHEN 'parcels' THEN (
-                 SELECT MAX(lp.fetched_at) FROM land_parcels lp
-                 WHERE lp.geom && ST_MakeEnvelope(
-                   st.min_lon, st.min_lat, st.max_lon, st.max_lat, 4326
-                 )
-                   AND ST_Intersects(
-                     lp.geom::geometry,
-                     ST_MakeEnvelope(
-                       st.min_lon, st.min_lat, st.max_lon, st.max_lat, 4326
-                     )
+                 AND ST_Intersects(
+                   ap.geom::geometry,
+                   ST_MakeEnvelope(
+                     st.min_lon, st.min_lat, st.max_lon, st.max_lat, 4326
                    )
-               )
-               ELSE NULL
-             END
+                 )
+             )
            )
          ) AS feature,
          st.tile_key
@@ -272,57 +251,6 @@ export class ViewerService {
          WHERE geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
            AND ST_Intersects(geom::geometry, ST_MakeEnvelope($1, $2, $3, $4, 4326))
          ORDER BY geom::geometry <-> ST_SetSRID(ST_MakePoint($5, $6), 4326)
-         LIMIT $7::int
-       ) sub`,
-      [minX, minY, maxX, maxY, cx, cy, limit],
-    );
-
-    return row?.geojson ?? { type: 'FeatureCollection', features: [] };
-  }
-
-  async getParcelsGeoJson(
-    minLonStr: string,
-    minLatStr: string,
-    maxLonStr: string,
-    maxLatStr: string,
-    limitStr: string | undefined,
-  ): Promise<ViewerFeatureCollection> {
-    const { minX, minY, maxX, maxY } = parseBbox(
-      minLonStr,
-      minLatStr,
-      maxLonStr,
-      maxLatStr,
-    );
-    const limit = parseLimit(
-      limitStr,
-      DEFAULT_LIMITS.parcels,
-      DEFAULT_LIMITS.parcels,
-    );
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-
-    const [row] = await this.ds.query<{ geojson: ViewerFeatureCollection }[]>(
-      `SELECT json_build_object(
-         'type', 'FeatureCollection',
-         'features', COALESCE(json_agg(feature), '[]'::json)
-       )::json AS geojson
-       FROM (
-         SELECT json_build_object(
-           'type', 'Feature',
-           'geometry', ST_AsGeoJSON(
-             ST_SimplifyPreserveTopology(geom::geometry, 0.00008)
-           )::json,
-           'properties', json_build_object(
-             'wfsFeatureId', wfs_feature_id,
-             'cadNum', cad_num,
-             'objectId', object_id::text,
-             'properties', properties
-           )
-         ) AS feature
-         FROM land_parcels
-         WHERE geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
-           AND ST_Intersects(geom::geometry, ST_MakeEnvelope($1, $2, $3, $4, 4326))
-         ORDER BY ST_Centroid(geom::geometry) <-> ST_SetSRID(ST_MakePoint($5, $6), 4326)
          LIMIT $7::int
        ) sub`,
       [minX, minY, maxX, maxY, cx, cy, limit],

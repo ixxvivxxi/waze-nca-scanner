@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Waze NCA Scanner — project overview
 
-Scans NCA cadastral map (map.nca.by WFS), stores addresses/parcels in PostGIS, serves WME userscript.
+Scans NCA cadastral map (map.nca.by WFS), stores **address points** in PostGIS, serves WME userscript.
 
 | Piece | Path | Notes |
 |-------|------|-------|

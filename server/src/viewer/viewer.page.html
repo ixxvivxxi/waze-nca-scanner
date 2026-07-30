@@ -53,25 +53,23 @@
     <dl class="stats" id="stats">Загрузка статистики…</dl>
     <div class="layers">
       <strong>Слои</strong>
-      <label><input type="checkbox" id="ly-tiles" checked /> Скан-тайлы (по статусу)</label>
-      <label><input type="checkbox" id="ly-parcels" /> Земельные участки (с масштаба 7)</label>
-      <label><input type="checkbox" id="ly-addresses" /> Адресные точки (с масштаба 9)</label>
+      <label><input type="checkbox" id="ly-tiles" checked /> Scan tiles (by status)</label>
+      <label><input type="checkbox" id="ly-addresses" /> Address points (from zoom 9)</label>
     </div>
     <div class="legend" id="tile-legend">
-      <strong>Легенда скан-тайлов</strong><br/>
-      <span class="legend-sub">Заливка — давность данных в bbox (по последнему <code>fetched_at</code> в БД). Сканер обходит очередь примерно <strong>раз в неделю</strong> — пороги ниже с запасом на разброс по тайлам. Контур — тот же оттенок; если тайл ещё <strong>в очереди</strong>, а данные уже есть — контур <strong>пунктирный</strong>. Две строки очереди (адреса и участки) с одним bbox на карте <strong>сливаются в один полигон</strong> (цвет по более свежей дате).</span><br/>
-      <span class="sw" style="background:#388e3c;border:2px solid #1b5e20"></span> до ~10 суток (есть свежие <strong>адреса</strong> в БД по ячейке; при двух слоях — по более старой из двух дат)
-      <span class="sw" style="background:#fffde7;border:2px solid #f9a825"></span> в БД есть только участки, <strong>адресов по ячейке нет</strong>
-      <span class="sw" style="background:#fb8c00;border:2px solid #e65100"></span> ~10–21 суток (устаревают)
-      <span class="sw" style="background:#c62828;border:2px solid #6d0000"></span> старше ~21 суток (вероятна проблема)
-      <span class="sw" style="background:#bdbdbd;border:2px solid #424242"></span> нет строк в БД по bbox<br/>
-      <span class="sw" style="background:#fff59d;border:2px dashed #f57f17"></span> в очереди, данных в БД по bbox ещё нет
-      <span class="sw" style="background:#ffcdd2;border:2px solid #b71c1c"></span> ошибка сканирования<br/>
-      <span class="sw" style="background:#4fc3f7;border:2px solid #01579b"></span> bbox запроса «живого» NCA (пока открыта панель)<br/>
-      <span class="sw" style="background:#f8bbd0;border:3px solid #ad1457"></span> тайл, который сейчас обрабатывает <strong>фоновый сканер</strong>
+      <strong>Scan tile legend</strong><br/>
+      <span class="legend-sub">Fill = data age in bbox (latest <code>fetched_at</code> in DB). Scanner walks the queue about <strong>once a week</strong>. Outline uses the same hue; dashed outline = still queued while data already exists.</span><br/>
+      <span class="sw" style="background:#388e3c;border:2px solid #1b5e20"></span> up to ~10 days (fresh addresses in cell)
+      <span class="sw" style="background:#fb8c00;border:2px solid #e65100"></span> ~10–21 days
+      <span class="sw" style="background:#c62828;border:2px solid #6d0000"></span> older than ~21 days
+      <span class="sw" style="background:#bdbdbd;border:2px solid #424242"></span> no rows in DB for bbox<br/>
+      <span class="sw" style="background:#fff59d;border:2px dashed #f57f17"></span> queued, no data yet
+      <span class="sw" style="background:#ffcdd2;border:2px solid #b71c1c"></span> scan error<br/>
+      <span class="sw" style="background:#4fc3f7;border:2px solid #01579b"></span> live NCA request bbox<br/>
+      <span class="sw" style="background:#f8bbd0;border:3px solid #ad1457"></span> tile currently processed by <strong>background scanner</strong>
     </div>
-    <p class="hint">Сдвиньте карту или измените масштаб — объекты подгружаются для видимой области. Слишком широкий вид (&gt; ~15° по стороне) не запрашивается.</p>
-    <p class="hint"><strong>Живой NCA:</strong> клик по любому скан-тайлу — сначала запрашиваются <strong>адресные точки</strong> для этого bbox; <strong>участки</strong> — только если NCA не вернул ни одной адресной точки. На сервере: WFS GetFeature по под-ячейкам. Параметры: <code>VIEWER_NCA_SUBDIVIDE</code>, <code>VIEWER_NCA_REQUEST_DELAY_MS</code> в <code>.env</code>.</p>
+    <p class="hint">Pan or zoom — objects load for the visible area. Views wider than ~15° per side are not requested.</p>
+    <p class="hint"><strong>Live NCA:</strong> click a scan tile to fetch <strong>address points</strong> for that bbox (WFS GetFeature by sub-cells). Env: <code>VIEWER_NCA_SUBDIVIDE</code>, <code>VIEWER_NCA_REQUEST_DELAY_MS</code>.</p>
     <div class="err" id="err" hidden></div>
   </div>
   <div id="nca-panel" class="nca-panel" hidden></div>
@@ -90,8 +88,7 @@
     [51.22, 23.12],
     [56.18, 32.75],
   ];
-  /** One zoom level lower than before: load parcels / addresses when map is more zoomed out. */
-  const ZOOM_PARCELS_MIN = 7;
+  /** Load address points when map is zoomed in enough. */
   const ZOOM_ADDRESSES_MIN = 9;
 
   const map = L.map('map').setView([53.55, 27.55], 6);
@@ -138,8 +135,7 @@
   }
 
   /**
-   * One polygon per geographic cell. Keep separate lastAddrFetchedAt / lastParcFetchedAt so the map
-   * does not look "fresh green" from parcels while address_points for the cell are still empty.
+   * One polygon per geographic cell (address scan tiles).
    */
   function mergeScanTileFeaturesByBbox(features) {
     var groups = new Map();
@@ -155,23 +151,18 @@
       var cur = groups.get(key);
       if (!cur) {
         var init = Object.assign({}, p, bb, {
-          lastAddrFetchedAt: p.layerKind === 'addresses' ? p.lastDataFetchedAt : null,
-          lastParcFetchedAt: p.layerKind === 'parcels' ? p.lastDataFetchedAt : null,
+          lastAddrFetchedAt: p.lastDataFetchedAt != null ? p.lastDataFetchedAt : null,
         });
         delete init.lastDataFetchedAt;
         groups.set(key, { geom: f.geometry, props: init });
         continue;
       }
       var q = cur.props;
-      if (p.layerKind === 'addresses') {
-        q.lastAddrFetchedAt = p.lastDataFetchedAt != null ? p.lastDataFetchedAt : q.lastAddrFetchedAt;
-      } else {
-        q.lastParcFetchedAt = p.lastDataFetchedAt != null ? p.lastDataFetchedAt : q.lastParcFetchedAt;
-      }
+      q.lastAddrFetchedAt = p.lastDataFetchedAt != null ? p.lastDataFetchedAt : q.lastAddrFetchedAt;
       if (p.status === 'pending' || q.status === 'pending') q.status = 'pending';
       else if (p.status === 'failed' || q.status === 'failed') q.status = 'failed';
       else q.status = 'done';
-      if (p.layerKind !== q.layerKind) q.layerKind = 'addresses';
+      q.layerKind = 'addresses';
       q.tileKey = (q.tileKey || '') + '+' + (p.tileKey || '');
       delete q.lastDataFetchedAt;
       cur.props = q;
@@ -204,7 +195,6 @@
       });
     }
     var tAddr = p.lastAddrFetchedAt != null ? lastDataFetchedMs({ lastDataFetchedAt: p.lastAddrFetchedAt }) : null;
-    var tParc = p.lastParcFetchedAt != null ? lastDataFetchedMs({ lastDataFetchedAt: p.lastParcFetchedAt }) : null;
     var tLegacy = lastDataFetchedMs(p);
 
     function styleFreshness(ageMs, pending) {
@@ -234,28 +224,8 @@
       });
     }
 
-    if (tAddr != null && tParc != null) {
-      return styleFreshness(Date.now() - Math.min(tAddr, tParc), status === 'pending');
-    }
-    if (tAddr != null && tParc == null) {
+    if (tAddr != null) {
       return styleFreshness(Date.now() - tAddr, status === 'pending');
-    }
-    if (tAddr == null && tParc != null) {
-      if (status === 'pending') {
-        return Object.assign({}, base, {
-          color: '#f57f17',
-          fillColor: '#fff8e1',
-          weight: 3,
-          dashArray: '6 4',
-          fillOpacity: 0.24,
-        });
-      }
-      return Object.assign({}, base, {
-        color: '#f9a825',
-        fillColor: '#fffde7',
-        weight: 2,
-        fillOpacity: 0.2,
-      });
     }
     const t = tLegacy;
     if (t != null) {
@@ -357,7 +327,7 @@
       showNcaPanel('Живой NCA', '<p class="err">Нужен полигон тайла или bbox в свойствах.</p>');
       return;
     }
-    var queueLayer = props.layerKind === 'parcels' ? 'parcels' : 'addresses';
+    var queueLayer = 'addresses';
     var baseQ = {
       minLon: String(bbox.minLon),
       minLat: String(bbox.minLat),
@@ -367,67 +337,41 @@
     showNcaLivePanelWithFetch(baseQ, queueLayer, props.tileKey || '—');
   }
 
-  /**
-   * Always load address points first; land parcels only if NCA returns no address features in bbox.
-   */
+  /** Load address points for the tile bbox from live NCA WFS. */
   async function showNcaLivePanelWithFetch(baseQ, queueLayer, tileKey) {
     showLiveNcaBboxFromBaseQ(baseQ);
-    var title = 'Живой NCA — сначала адреса';
-    showNcaPanel(title, '<p class="loading">Загрузка адресов с map.nca.by…</p><p class="meta">тип тайла в очереди: ' +
-      escapeHtml(queueLayer === 'parcels' ? 'участки' : 'адреса') + ', ключ: ' + escapeHtml(tileKey) + '</p>');
+    var title = 'Live NCA — addresses';
+    showNcaPanel(title, '<p class="loading">Loading addresses from map.nca.by…</p><p class="meta">queue: ' +
+      escapeHtml(queueLayer) + ', key: ' + escapeHtml(tileKey) + '</p>');
     try {
-      var qAddr = new URLSearchParams(Object.assign({}, baseQ, { layerKind: 'addresses' }));
+      var qAddr = new URLSearchParams(baseQ);
       var r1 = await fetch('/api/viewer/nca-live.geojson?' + qAddr.toString());
       var t1 = await r1.text();
       if (!r1.ok) {
         showNcaPanel(title, '<p class="err">' + escapeHtml(t1.slice(0, 500)) + '</p>');
         return;
       }
-      var fcAddr = JSON.parse(t1);
-      var featsAddr = fcAddr.features || [];
-      var fc = fcAddr;
-      var layerKind = 'addresses';
-      var note = '';
-      if (featsAddr.length === 0) {
-        showNcaPanel(title, '<p class="loading">Адресов нет — загрузка участков…</p><p class="meta">ключ: ' +
-          escapeHtml(tileKey) + '</p>');
-        var qPar = new URLSearchParams(Object.assign({}, baseQ, { layerKind: 'parcels' }));
-        var r2 = await fetch('/api/viewer/nca-live.geojson?' + qPar.toString());
-        var t2 = await r2.text();
-        if (!r2.ok) {
-          showNcaPanel(title, '<p class="err">Адресов нет; запрос участков не удался: ' + escapeHtml(t2.slice(0, 500)) + '</p>');
-          return;
-        }
-        fc = JSON.parse(t2);
-        layerKind = 'parcels';
-        note = '<p class="meta">В этом bbox NCA не вернул адресов — показаны <strong>участки</strong>.</p>';
-      }
+      var fc = JSON.parse(t1);
       var feats = fc.features || [];
-      var ingestAddr = fcAddr.ingestedCount;
-      var ingestParc = layerKind === 'parcels' && fc.ingestedCount != null ? fc.ingestedCount : null;
-      var ingestLine = '';
-      if (ingestAddr != null || ingestParc != null) {
-        ingestLine = 'записей в БД: адреса <strong>' + (ingestAddr != null ? ingestAddr : '—') + '</strong>';
-        if (ingestParc != null) ingestLine += ', участки <strong>' + ingestParc + '</strong>';
-      }
-      var finalTitle = layerKind === 'addresses' ? 'Живой NCA — адреса' : 'Живой NCA — участки (запасной вариант)';
-      var lines = [note, '<p class="meta">Объектов из NCA: <strong>' + feats.length + '</strong>' +
-        (ingestLine ? ' — ' + ingestLine : '') + '</p>'].filter(Boolean);
+      var ingestAddr = fc.ingestedCount;
+      var ingestLine = ingestAddr != null
+        ? ' — DB upserts: <strong>' + ingestAddr + '</strong>'
+        : '';
+      var lines = ['<p class="meta">Features from NCA: <strong>' + feats.length + '</strong>' +
+        ingestLine + '</p>'];
       var maxShow = 12;
       for (var i = 0; i < Math.min(maxShow, feats.length); i++) {
         var p = feats[i].properties || {};
-        var one = layerKind === 'addresses'
-          ? ('id_adr=' + (p.id_adr != null ? p.id_adr : '—'))
-          : ('cad_num=' + (p.cad_num != null ? p.cad_num : '—') + ', id=' + String(feats[i].id != null ? feats[i].id : '—'));
+        var one = 'id_adr=' + (p.id_adr != null ? p.id_adr : '—');
         lines.push('<p class="meta">' + (i + 1) + '. ' + escapeHtml(one) + '</p>');
       }
       if (feats.length > maxShow) {
-        lines.push('<p class="meta">… ещё ' + (feats.length - maxShow) + '</p>');
+        lines.push('<p class="meta">… +' + (feats.length - maxShow) + ' more</p>');
       }
       var jsonSample = JSON.stringify(fc, null, 2);
-      if (jsonSample.length > 12000) jsonSample = jsonSample.slice(0, 12000) + '\n… (обрезано)';
+      if (jsonSample.length > 12000) jsonSample = jsonSample.slice(0, 12000) + '\n… (truncated)';
       lines.push('<pre>' + escapeHtml(jsonSample) + '</pre>');
-      showNcaPanel(finalTitle, lines.join(''));
+      showNcaPanel(title, lines.join(''));
       void loadVisible();
       void loadStats();
     } catch (e) {
@@ -476,9 +420,6 @@
     }
     syncScannerActiveHighlight({ activeScan: lastActiveScanCache });
   }
-  const parcelsLayer = L.geoJSON(null, {
-    style: { color: '#1565c0', weight: 1, fillOpacity: 0.08 },
-  });
   const addressesLayer = L.geoJSON(null, {
     pointToLayer: function (feature, latlng) {
       const z = map.getZoom();
@@ -527,9 +468,8 @@
       Math.abs(b.getNorth() - b.getSouth()),
     );
     if (span > 15.05) {
-      showErr('Приблизьте карту: вид слишком широкий для сервера (лимит ~15° по стороне).');
+      showErr('Zoom in: view is too wide for the server (~15° max per side).');
       tilesLayer.clearLayers();
-      parcelsLayer.clearLayers();
       addressesLayer.clearLayers();
       redrawActiveScanOverlayFromCache();
       return;
@@ -548,16 +488,6 @@
         tilesLayer.clearLayers();
       }
 
-      if (document.getElementById('ly-parcels').checked && zoom >= ZOOM_PARCELS_MIN) {
-        const gj = await loadJson('/api/viewer/parcels.geojson?' + q.toString());
-        parcelsLayer.clearLayers();
-        parcelsLayer.addData(gj);
-        if (!map.hasLayer(parcelsLayer)) parcelsLayer.addTo(map);
-      } else {
-        parcelsLayer.clearLayers();
-        map.removeLayer(parcelsLayer);
-      }
-
       if (document.getElementById('ly-addresses').checked && zoom >= ZOOM_ADDRESSES_MIN) {
         const gj = await loadJson('/api/viewer/addresses.geojson?' + q.toString());
         addressesLayer.clearLayers();
@@ -574,8 +504,7 @@
   }
 
   function ruLayerKind(lk) {
-    if (lk === 'addresses') return 'адреса';
-    if (lk === 'parcels') return 'участки';
+    if (lk === 'addresses') return 'addresses';
     return String(lk);
   }
   function ruScanStatus(st) {
@@ -630,21 +559,20 @@
           '<span class="meta">ключ: ' + tkDisp + '</span>';
       }
       el.innerHTML =
-        '<dt>Адресных точек</dt><dd>' + s.addressCount.toLocaleString('ru-RU') + '</dd>' +
-        '<dt>Земельных участков</dt><dd>' + s.parcelCount.toLocaleString('ru-RU') + '</dd>' +
-        '<dt>Скан-тайлы</dt><dd>всего ' + s.scanTiles.total.toLocaleString('ru-RU') +
-        ' — готово ' + s.scanTiles.done.toLocaleString('ru-RU') +
-        ', в очереди ' + s.scanTiles.pending.toLocaleString('ru-RU') +
-        ', ошибка ' + s.scanTiles.failed.toLocaleString('ru-RU') + '</dd>' +
-        '<dt>По слою и статусу</dt><dd>' + breakdown + '</dd>' +
-        '<dt>Сейчас в работе сканера</dt><dd>' + actLine + '</dd>';
+        '<dt>Address points</dt><dd>' + s.addressCount.toLocaleString('en-US') + '</dd>' +
+        '<dt>Scan tiles</dt><dd>total ' + s.scanTiles.total.toLocaleString('en-US') +
+        ' — done ' + s.scanTiles.done.toLocaleString('en-US') +
+        ', pending ' + s.scanTiles.pending.toLocaleString('en-US') +
+        ', failed ' + s.scanTiles.failed.toLocaleString('en-US') + '</dd>' +
+        '<dt>By layer / status</dt><dd>' + breakdown + '</dd>' +
+        '<dt>Scanner active</dt><dd>' + actLine + '</dd>';
     } catch (e) {
-      el.textContent = 'Статистика недоступна: ' + (e.message || e);
+      el.textContent = 'Stats unavailable: ' + (e.message || e);
     }
   }
 
   map.on('moveend', scheduleLoad);
-  ['ly-tiles', 'ly-parcels', 'ly-addresses'].forEach(function (id) {
+  ['ly-tiles', 'ly-addresses'].forEach(function (id) {
     document.getElementById(id).addEventListener('change', scheduleLoad);
   });
   setInterval(function () {
